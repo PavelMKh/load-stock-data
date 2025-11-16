@@ -8,8 +8,10 @@ This application allows you to get quotes via the API for companies on MOEX and 
 - (in progress) Financial reports for global market companies: income statement, balance sheet, cash flow statement
 
 ## 🧑‍💻 How to use
+- Don't forget to create a virtual environment
 - Installing libraries `pip install -r requirements.txt`
 - In the file dates.txt, the start date of quote loading and the end date of loading are specified. When determining the dates, it is important to keep in mind the limit of free API requests for foreign exchanges
+- In run.sh, the script that needs to be executed is specified.
 
 ## 🛠️ Technology stack
 - Python 3.12 

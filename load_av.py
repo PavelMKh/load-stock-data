@@ -1,6 +1,7 @@
 import os
 import logging
 import traceback
+import sqlite3
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -29,11 +30,51 @@ logger = logging.getLogger(__name__)
 
 DATE_FILE = 'dates.txt'
 
-TICKERS = ['AAPL', 'MSFT', 'NVDA', 'JPM', 'V', 'JNJ', 'PG', 'DIS', 'KO', 'PFE', 'CSCO', 'SPY']
+TICKERS = ['SPY', 'IBIT', 'ETHA', 'AAPL', 'MSFT', 'NVDA', 'JPM', 'V', 'JNJ', 'PG', 'DIS', 'KO'] # 'PFE', 'CSCO',
 
 INTERVALS = ['15min'] # '60min'
 
-FILE_PATH = 'av.csv'
+DB_PATH = 'stocks.db'
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS candles (
+            begin DATETIME,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume INTEGER,
+            ticker TEXT,
+            interval TEXT,
+            UNIQUE(begin, ticker, interval)
+        )
+    ''')
+    conn.commit()
+    return conn
+
+def insert_df_into_db(conn, df):
+    cursor = conn.cursor()
+    for _, row in df.iterrows():
+        try:
+            cursor.execute('''
+                INSERT OR IGNORE INTO candles (begin, open, high, low, close, volume, ticker, interval)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                row['begin'].strftime('%Y-%m-%d %H:%M:%S'),
+                row['open'],
+                row['high'],
+                row['low'],
+                row['close'],
+                int(row['volume']),
+                row['ticker'],
+                row['interval']
+            ))
+        except Exception as e:
+            logger.error(f"Ошибка при вставке данных: {e}")
+    conn.commit()
 
 def load_dates():
     if os.path.exists(DATE_FILE):
@@ -41,7 +82,7 @@ def load_dates():
             lines = f.read().splitlines()
             if len(lines) == 2:
                 return lines[0], lines[1]
-    # если файла нет или он пуст, возвращаем стартовые даты:
+
     return '2022-10-01', '2023-07-01'
 
 def save_dates(start_date, end_date):
@@ -135,27 +176,31 @@ async def main():
     - iterates over tickers and intervals to gather historical data over the specified date range;
     - saves the collected data to a file.    
     """
-    apikey = os.getenv("API_KEY")
+    conn = init_db()
+    try:
+        apikey = os.getenv("API_KEY")
+        START_DATE, END_DATE = load_dates()
+        async with aiohttp.ClientSession() as session:
+            for ticker in tqdm(TICKERS, desc="Tickers"):
+                for interval in INTERVALS:
+                    new_data = await fetch_for_ticker_interval(ticker, apikey, interval, START_DATE, END_DATE, session)
+                    if not new_data.empty:
+                        insert_df_into_db(conn, new_data)
+        start_dt = datetime.strptime(START_DATE, '%Y-%m-%d') + relativedelta(months=2)
+        end_dt = datetime.strptime(END_DATE, '%Y-%m-%d') + relativedelta(months=2)
 
-    START_DATE, END_DATE = load_dates()
+        if start_dt > datetime.now():
+            start_dt = datetime.now()
 
-    file_exists = os.path.exists(FILE_PATH)
-  
-    print(f"Start date: {START_DATE}")
-    async with aiohttp.ClientSession() as session:
-        for ticker in tqdm(TICKERS, desc="Tickers"):
-            for interval in INTERVALS:
-                new_data = await fetch_for_ticker_interval(ticker, apikey, interval, START_DATE, END_DATE, session)
-                if not new_data.empty:
-                    new_data.to_csv(FILE_PATH, mode='a', index=False,
-                                    header=not file_exists)
-                    file_exists = True
+        if end_dt > datetime.now():
+            end_dt = datetime.now()
 
-    start_dt = datetime.strptime(START_DATE, '%Y-%m-%d') + relativedelta(months=2)
-    end_dt = datetime.strptime(END_DATE, '%Y-%m-%d') + relativedelta(months=2)
-    save_dates(start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
-    logger.info(f"Data fetched and saved to {FILE_PATH}; Updated dates to {start_dt.strftime('%Y-%m-%d')} - {end_dt.strftime('%Y-%m-%d')}")
+        save_dates(start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
+        logger.info(f"Data fetched and saved to {DB_PATH}; Updated dates to {start_dt.strftime('%Y-%m-%d')} - {end_dt.strftime('%Y-%m-%d')}")
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':
     asyncio.run(main())
+
